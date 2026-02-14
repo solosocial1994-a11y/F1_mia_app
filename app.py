@@ -3,64 +3,71 @@ import requests
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="OpenF1 Ultimate Hub", layout="wide")
+st.set_page_config(page_title="OpenF1 Hub", layout="wide")
 st.title("🏎️ OpenF1 Ultimate Dashboard")
 
-# Funzione di recupero dati robusta
 def get_data(endpoint):
     url = f"https://api.openf1.org/v1/{endpoint}"
     try:
         r = requests.get(url, timeout=10)
         data = r.json()
         if not data: return None
-        # Forza i dati in una lista se non lo sono già
         return data if isinstance(data, list) else [data]
     except:
         return None
 
-# Recupero ultima sessione disponibile
+# Recupero ultima sessione
 sessions = get_data("sessions?year=2024")
 if sessions:
     session = sessions[-1]
     s_key = session['session_key']
     
-    st.sidebar.markdown(f"### 🏁 {session['location']}")
-    st.sidebar.write(f"**Sessione:** {session['session_name']}")
-    st.sidebar.write(f"**Data:** {session['date_start'][:10]}")
+    st.sidebar.success(f"📍 {session['location']}")
+    st.sidebar.info(f"Sessione ID: {s_key}")
 
-    # Organizzazione in Tab per non fare confusione
-    tab_drivers, tab_laps, tab_telemetry, tab_comms, tab_weather = st.tabs([
-        "👥 Piloti", "⏱️ Tempi & Gomme", "📡 Telemetria & GPS", "📻 Comunicazioni", "🌦️ Meteo"
-    ])
+    tabs = st.tabs(["👥 Piloti", "⏱️ Tempi", "📡 GPS", "📻 Radio", "🌦️ Meteo"])
 
-    with tab_drivers:
-        st.header("Griglia di Partenza")
+    # 1. PILOTI - Mostra tutto quello che l'API invia
+    with tabs[0]:
+        st.header("Anagrafica Piloti")
         drivers = get_data(f"drivers?session_key={s_key}")
         if drivers:
             df_d = pd.DataFrame(drivers)
-            st.dataframe(df_d[['broadcast_name', 'team_name', 'driver_number', 'team_colour']], use_container_width=True)
+            # Mostra tutte le colonne disponibili invece di sceglierle
+            st.dataframe(df_d, use_container_width=True)
+        else:
+            st.warning("Dati piloti non disponibili per questa sessione.")
 
-    with tab_laps:
-        st.header("Analisi Giri e Strategia")
-        col_l, col_s = st.columns(2)
-        with col_l:
-            st.subheader("Ultimi Giri")
-            laps = get_data(f"laps?session_key={s_key}")
-            if laps: st.dataframe(pd.DataFrame(laps).tail(50))
-        with col_s:
-            st.subheader("Uso Gomme (Stints)")
-            stints = get_data(f"stints?session_key={s_key}")
-            if stints: st.dataframe(pd.DataFrame(stints))
+    # 2. TEMPI - Analisi Giri
+    with tabs[1]:
+        st.header("Cronometraggio")
+        laps = get_data(f"laps?session_key={s_key}")
+        if laps:
+            st.dataframe(pd.DataFrame(laps).tail(50), use_container_width=True)
 
-    with tab_telemetry:
-        st.header("Dati GPS e Telemetria")
-        st.info("I dati GPS mostrano il tracciato basato sulle ultime 200 posizioni rilevate.")
-        location = get_data(f"location?session_key={s_key}")
-        if location:
-            df_loc = pd.DataFrame(location).tail(200)
-            fig = px.line_3d(df_loc, x='x', y='y', z='z', color='driver_number', title="Tracciato Live")
+    # 3. GPS - Tracciato 3D
+    with tabs[2]:
+        st.header("Live Tracking (GPS)")
+        locs = get_data(f"location?session_key={s_key}")
+        if locs:
+            df_loc = pd.DataFrame(locs).tail(300)
+            # Usiamo nomi colonne sicuri
+            fig = px.scatter_3d(df_loc, x='x', y='y', z='z', color='driver_number')
             st.plotly_chart(fig, use_container_width=True)
 
-    with tab_comms:
-        st.header("Radio & Race Control")
+    # 4. RADIO - Comunicazioni
+    with tabs[3]:
+        st.header("Team Radio & Race Control")
         radio = get_data(f"team_radio?session_key={s_key}")
+        if radio:
+            st.dataframe(pd.DataFrame(radio).tail(20), use_container_width=True)
+
+    # 5. METEO - Grafico temperature
+    with tabs[4]:
+        st.header("Meteo")
+        weather = get_data(f"weather?session_key={s_key}")
+        if weather:
+            df_w = pd.DataFrame(weather)
+            st.line_chart(df_w[['track_temperature', 'air_temperature']])
+else:
+    st.error("Impossibile caricare i dati. Verifica la connessione all'API.")
