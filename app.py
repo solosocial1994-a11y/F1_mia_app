@@ -3,76 +3,64 @@ import requests
 import pandas as pd
 import plotly.express as px
 
-st.set_page_config(page_title="OpenF1 Ultimate", layout="wide")
-st.title("🏁 OpenF1 Full Dashboard")
+st.set_page_config(page_title="OpenF1 Ultimate Hub", layout="wide")
+st.title("🏎️ OpenF1 Ultimate Dashboard")
 
+# Funzione di recupero dati robusta
 def get_data(endpoint):
     url = f"https://api.openf1.org/v1/{endpoint}"
     try:
         r = requests.get(url, timeout=10)
-        return r.json()
-    except: return None
+        data = r.json()
+        if not data: return None
+        # Forza i dati in una lista se non lo sono già
+        return data if isinstance(data, list) else [data]
+    except:
+        return None
 
-# Selezione Sessione (Prendiamo l'ultima del 2024 per sicurezza dati)
+# Recupero ultima sessione disponibile
 sessions = get_data("sessions?year=2024")
 if sessions:
     session = sessions[-1]
     s_key = session['session_key']
-    st.sidebar.success(f"Sessione: {session['location']}")
     
-    # CREAZIONE TAB PER VEDERE "TUTTO"
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "👥 Piloti", "⏱️ Tempi & Gomme", "📡 Telemetria Live", "📻 Radio & Race Control", "🌦️ Meteo"
+    st.sidebar.markdown(f"### 🏁 {session['location']}")
+    st.sidebar.write(f"**Sessione:** {session['session_name']}")
+    st.sidebar.write(f"**Data:** {session['date_start'][:10]}")
+
+    # Organizzazione in Tab per non fare confusione
+    tab_drivers, tab_laps, tab_telemetry, tab_comms, tab_weather = st.tabs([
+        "👥 Piloti", "⏱️ Tempi & Gomme", "📡 Telemetria & GPS", "📻 Comunicazioni", "🌦️ Meteo"
     ])
 
-    # --- TAB 1: PILOTI ---
-    with tab1:
-        st.header("Anagrafica Piloti")
+    with tab_drivers:
+        st.header("Griglia di Partenza")
         drivers = get_data(f"drivers?session_key={s_key}")
         if drivers:
-            st.table(pd.DataFrame(drivers)[['broadcast_name', 'team_name', 'driver_number', 'country_code']])
+            df_d = pd.DataFrame(drivers)
+            st.dataframe(df_d[['broadcast_name', 'team_name', 'driver_number', 'team_colour']], use_container_width=True)
 
-    # --- TAB 2: TEMPI & GOMME ---
-    with tab2:
-        st.header("Ultimi Giri e Mescole")
-        laps = get_data(f"laps?session_key={s_key}")
-        stints = get_data(f"stints?session_key={s_key}")
-        if laps:
-            st.dataframe(pd.DataFrame(laps).tail(20)) # Mostra gli ultimi 20 giri registrati
-        if stints:
-            st.subheader("Strategia Gomme")
-            st.write(pd.DataFrame(stints)[['driver_number', 'compound', 'tyre_age_at_start']])
+    with tab_laps:
+        st.header("Analisi Giri e Strategia")
+        col_l, col_s = st.columns(2)
+        with col_l:
+            st.subheader("Ultimi Giri")
+            laps = get_data(f"laps?session_key={s_key}")
+            if laps: st.dataframe(pd.DataFrame(laps).tail(50))
+        with col_s:
+            st.subheader("Uso Gomme (Stints)")
+            stints = get_data(f"stints?session_key={s_key}")
+            if stints: st.dataframe(pd.DataFrame(stints))
 
-    # --- TAB 3: TELEMETRIA (GPS) ---
-    with tab3:
-        st.header("Posizione GPS in tempo reale")
-        # Prendiamo le posizioni degli ultimi secondi
+    with tab_telemetry:
+        st.header("Dati GPS e Telemetria")
+        st.info("I dati GPS mostrano il tracciato basato sulle ultime 200 posizioni rilevate.")
         location = get_data(f"location?session_key={s_key}")
         if location:
-            df_loc = pd.DataFrame(location).tail(100)
-            fig = px.scatter_3d(df_loc, x='x', y='y', z='z', color='driver_number', title="Mappa 3D Circuito")
+            df_loc = pd.DataFrame(location).tail(200)
+            fig = px.line_3d(df_loc, x='x', y='y', z='z', color='driver_number', title="Tracciato Live")
             st.plotly_chart(fig, use_container_width=True)
 
-    # --- TAB 4: RADIO & MESSAGGI ---
-    with tab4:
-        col_r, col_m = st.columns(2)
-        with col_r:
-            st.header("Team Radio")
-            radio = get_data(f"team_radio?session_key={s_key}")
-            if radio: st.write(pd.DataFrame(radio).tail(10))
-        with col_m:
-            st.header("Direzione Gara")
-            messages = get_data(f"race_control?session_key={s_key}")
-            if messages: st.write(pd.DataFrame(messages).tail(10))
-
-    # --- TAB 5: METEO ---
-    with tab5:
-        st.header("Dati Ambientali")
-        weather = get_data(f"weather?session_key={s_key}")
-        if weather:
-            df_w = pd.DataFrame(weather)
-            st.line_chart(df_w.set_index('date')['track_temperature'])
-            st.metric("Vento", f"{weather[-1]['wind_speed']} m/s")
-
-else:
-    st.error("Connessione fallita.")
+    with tab_comms:
+        st.header("Radio & Race Control")
+        radio = get_data(f"team_radio?session_key={s_key}")
