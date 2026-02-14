@@ -1,76 +1,78 @@
 import streamlit as st
 import requests
 import pandas as pd
-import plotly.express as px
 
-st.set_page_config(page_title="OpenF1 Hub", layout="wide")
-st.title("🏎️ OpenF1 Ultimate Dashboard")
+st.set_page_config(page_title="F1 Live Dashboard", layout="wide")
 
+# --- FUNZIONI DI SUPPORTO ---
 def get_data(endpoint):
     url = f"https://api.openf1.org/v1/{endpoint}"
     try:
         r = requests.get(url, timeout=10)
-        data = r.json()
-        if not data or len(data) == 0: return None
-        return data if isinstance(data, list) else [data]
-    except:
-        return None
+        return r.json()
+    except: return None
 
-# Sessione 9662 (Yas Island 2024)
-sessions = get_data("sessions?session_key=9662")
-if sessions:
-    session = sessions[0]
-    s_key = session['session_key']
+# --- SIDEBAR: SELEZIONE EVENTO ---
+st.sidebar.title("🏁 Menu F1")
+
+# 1. Scegli l'Anno
+year = st.sidebar.selectbox("Seleziona Anno", [2024, 2023], index=0)
+
+# 2. Scegli la Gara (Location)
+all_sessions = get_data(f"sessions?year={year}")
+if all_sessions:
+    # Creiamo una lista di nomi unici delle piste
+    locations = sorted(list(set([s['location'] for s in all_sessions])))
+    selected_loc = st.sidebar.selectbox("Seleziona Circuito", locations)
     
-    st.sidebar.success(f"📍 {session['location']}")
-    st.sidebar.info(f"Sessione: {session['session_name']}")
-
-    tabs = st.tabs(["👥 Piloti", "⏱️ Tempi", "📡 GPS & Telemetria", "📻 Radio", "🌦️ Meteo"])
-
-    with tabs[0]:
-        st.header("Anagrafica Piloti")
-        drivers = get_data(f"drivers?session_key={s_key}")
-        if drivers:
-            st.dataframe(pd.DataFrame(drivers), use_container_width=True)
-
-    with tabs[1]:
-        st.header("Cronometraggio")
-        laps = get_data(f"laps?session_key={s_key}")
-        if laps:
-            st.dataframe(pd.DataFrame(laps).tail(100), use_container_width=True)
-
-    with tabs[2]:
-        st.header("Live Tracking (GPS)")
-        locs = get_data(f"location?session_key={s_key}")
-        if locs:
-            df_loc = pd.DataFrame(locs).tail(200)
-            # PROTEZIONE GRAFICO: Controlla se le colonne x, y, z esistono
-            columns_needed = {'x', 'y', 'z', 'driver_number'}
-            if columns_needed.issubset(df_loc.columns):
-                try:
-                    fig = px.scatter_3d(df_loc, x='x', y='y', z='z', color='driver_number', title="Mappa GPS")
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.warning("Impossibile generare il grafico 3D. Ecco i dati grezzi:")
-                    st.dataframe(df_loc)
-            else:
-                st.write("Dati GPS incompleti. Visualizzazione tabella:")
-                st.dataframe(df_loc)
-
-    with tabs[3]:
-        st.header("Team Radio")
-        radio = get_data(f"team_radio?session_key={s_key}")
-        if radio:
-            st.dataframe(pd.DataFrame(radio).tail(20), use_container_width=True)
-
-    with tabs[4]:
-        st.header("Meteo")
-        weather = get_data(f"weather?session_key={s_key}")
-        if weather:
-            df_w = pd.DataFrame(weather)
-            if 'track_temperature' in df_w.columns:
-                st.line_chart(df_w[['track_temperature', 'air_temperature']])
-            else:
-                st.dataframe(df_w)
+    # 3. Scegli la Sessione (Gara, Qualifiche, FP1...)
+    session_options = [s for s in all_sessions if s['location'] == selected_loc]
+    session_names = {s['session_name']: s['session_key'] for s in session_options}
+    selected_session_name = st.sidebar.selectbox("Tipo Sessione", list(session_names.keys()))
+    s_key = session_names[selected_session_name]
 else:
-    st.error("Nessun dato trovato per questa sessione.")
+    st.error("Errore nel caricamento dei calendari.")
+    st.stop()
+
+st.title(f"🏎️ {selected_loc}: {selected_session_name}")
+
+# --- RECUPERO DATI PILOTI (Per trasformare i numeri in Nomi) ---
+drivers_list = get_data(f"drivers?session_key={s_key}")
+driver_map = {}
+if drivers_list:
+    # Creiamo un "dizionario" per tradurre il numero (es. 16) in Nome (Leclerc)
+    driver_map = {str(d['driver_number']): d['broadcast_name'] for d in drivers_list}
+
+# --- TAB INTERFACCIA ---
+tab1, tab2, tab3 = st.tabs(["📊 Classifica & Tempi", "📻 Radio Live", "🌦️ Meteo"])
+
+with tab1:
+    st.header("Tempi sul Giro")
+    laps = get_data(f"laps?session_key={s_key}")
+    if laps:
+        df_laps = pd.DataFrame(laps)
+        # TRADUZIONE: Sostituiamo il numero col nome del pilota
+        df_laps['pilota'] = df_laps['driver_number'].astype(str).map(driver_map)
+        
+        # Pulizia: mostriamo solo le cose importanti
+        display_laps = df_laps[['pilota', 'lap_number', 'lap_duration', 'pitting']].tail(20)
+        st.table(display_laps) # La tabella "Table" è più leggibile su mobile rispetto a "Dataframe"
+
+with tab2:
+    st.header("Comunicazioni Radio")
+    radio = get_data(f"team_radio?session_key={s_key}")
+    if radio:
+        df_radio = pd.DataFrame(radio)
+        df_radio['pilota'] = df_radio['driver_number'].astype(str).map(driver_map)
+        
+        for _, msg in df_radio.tail(10).iterrows():
+            with st.chat_message("player"):
+                st.write(f"**{msg['pilota']}**: [Audio Link]({msg['recording_url']})")
+
+with tab3:
+    weather = get_data(f"weather?session_key={s_key}")
+    if weather:
+        w = weather[-1]
+        c1, c2 = st.columns(2)
+        c1.metric("Temperatura Aria", f"{w['air_temperature']}°C")
+        c2.metric("Temperatura Pista", f"{w['track_temperature']}°C")
