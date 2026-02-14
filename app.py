@@ -2,8 +2,10 @@ import streamlit as st
 import requests
 import pandas as pd
 
-# Configurazione per farla sembrare un'app vera sul telefono
-st.set_page_config(page_title="F1 Live 2026", layout="wide")
+st.set_page_config(page_title="F1 2026 Hub", layout="wide")
+
+# CSS per evitare che le tabelle siano brutte su mobile
+st.markdown("""<style> .stTable { font-size: 12px !important; } </style>""", unsafe_allow_html=True)
 
 def get_f1(endpoint):
     url = f"https://api.openf1.org/v1/{endpoint}"
@@ -12,73 +14,64 @@ def get_f1(endpoint):
         return r.json()
     except: return None
 
-# --- SIDEBAR: SELEZIONE PULITA ---
-st.sidebar.title("🏎️ F1 2026")
-year = st.sidebar.selectbox("Anno", [2026, 2025, 2024], index=0)
-
-sessions = get_f1(f"sessions?year={year}")
-if sessions:
-    # Mostriamo solo i nomi delle piste
-    loc_list = sorted(list(set([s['location'] for s in sessions])), reverse=True)
-    sel_loc = st.sidebar.selectbox("Circuito", loc_list)
+# --- SIDEBAR ---
+with st.sidebar:
+    st.title("🏁 Comandi 2026")
+    year = st.selectbox("Anno", [2026, 2025, 2024], index=0)
+    sessions = get_f1(f"sessions?year={year}")
     
-    # Filtriamo le sessioni per quella pista
-    s_options = [s for s in sessions if s['location'] == sel_loc]
-    s_map = {f"{s['session_name']}": s['session_key'] for s in s_options}
-    sel_s_name = st.sidebar.selectbox("Sessione", list(s_map.keys()))
-    s_key = s_map[sel_s_name]
-else:
-    st.error("Dati non disponibili")
-    st.stop()
+    if sessions:
+        # Ordiniamo per data per trovare subito i test del Bahrain
+        s_df = pd.DataFrame(sessions).sort_values('date_start', ascending=False)
+        loc = st.selectbox("Circuito", s_df['location'].unique())
+        
+        s_options = s_df[s_df['location'] == loc]
+        s_name = st.selectbox("Sessione", s_options['session_name'].unique())
+        s_key = s_options[s_options['session_name'] == s_name]['session_key'].values[0]
+    else:
+        st.stop()
 
-# --- IL SEGRETO: LA MAPPA PILOTI (Per non vedere più solo numeri) ---
+# --- MAPPA PILOTI ---
 drivers_raw = get_f1(f"drivers?session_key={s_key}")
-d_map = {}
-if drivers_raw:
-    for d in drivers_raw:
-        d_map[str(d['driver_number'])] = {
-            "name": d['broadcast_name'],
-            "team": d['team_name'],
-            "color": f"#{d['team_colour']}"
-        }
+d_map = {str(d['driver_number']): {"name": d['broadcast_name'], "team": d['team_name'], "color": f"#{d['team_colour']}"} for d in drivers_raw} if drivers_raw else {}
 
-# --- INTERFACCIA GRAFICA PULITA ---
-st.title(f"🏁 {sel_loc}")
-st.subheader(f"{sel_s_name} - 2026")
+st.title(f"🏎️ {loc}")
+st.caption(f"Dati Live Sessione: {s_key}")
 
-tab1, tab2, tab3 = st.tabs(["⏱️ Classifica", "📻 Radio", "🌦️ Meteo"])
+tab1, tab2, tab3, tab4 = st.tabs(["⏱️ Tempi", "📊 Telemetria", "📻 Radio", "🌦️ Meteo"])
 
 with tab1:
+    st.subheader("Classifica Tempi")
     laps = get_f1(f"laps?session_key={s_key}")
     if laps:
-        df = pd.DataFrame(laps)
-        # Trasformiamo il numero nel Nome del Pilota
-        df['Pilota'] = df['driver_number'].astype(str).map(lambda x: d_map.get(x, {}).get('name', f"Pilota {x}"))
-        
-        # MOSTRA SOLO QUELLO CHE SERVE (Basta tabelle giganti!)
-        # Selezioniamo solo le colonne importanti
-        viste_importanti = df[['Pilota', 'lap_number', 'lap_duration']].dropna().tail(15)
-        st.table(viste_importanti) 
-    else:
-        st.info("Nessun tempo registrato.")
+        df_l = pd.DataFrame(laps).tail(20)
+        df_l['Pilota'] = df_l['driver_number'].astype(str).map(lambda x: d_map.get(x, {}).get('name', x))
+        # Mostriamo solo dati essenziali e puliti
+        st.table(df_l[['Pilota', 'lap_number', 'lap_duration']].rename(columns={'lap_number':'Giro', 'lap_duration':'Tempo'}))
 
 with tab2:
-    radio = get_f1(f"team_radio?session_key={s_key}")
-    if radio:
-        for r in radio[-10:]:
-            info = d_map.get(str(r['driver_number']), {"name": "Pilota", "color": "#ccc", "team": ""})
-            # Creiamo un box colorato per ogni messaggio
-            st.markdown(f"""
-                <div style="border-left: 10px solid {info['color']}; padding: 15px; background: #262730; border-radius: 5px; margin-bottom: 10px;">
-                    <strong>{info['name']}</strong> ({info['team']})<br>
-                    <a href="{r['recording_url']}" target="_blank" style="color: #ff4b4b; text-decoration: none;">▶️ ASCOLTA MESSAGGIO RADIO</a>
-                </div>
-            """, unsafe_allow_html=True)
+    st.subheader("Telemetria in Tempo Reale")
+    # Prendiamo gli ultimi dati dei sensori (velocità, giri motore)
+    car_data = get_f1(f"car_data?session_key={s_key}")
+    if car_data:
+        df_c = pd.DataFrame(car_data).tail(10)
+        df_c['Pilota'] = df_c['driver_number'].astype(str).map(lambda x: d_map.get(x, {}).get('name', x))
+        st.dataframe(df_c[['Pilota', 'speed', 'rpm', 'n_gear', 'throttle', 'brake']], use_container_width=True)
+    else:
+        st.info("Telemetria non disponibile per questa sessione di test.")
 
 with tab3:
+    st.subheader("Radio Team")
+    radio = get_f1(f"team_radio?session_key={s_key}")
+    if radio:
+        for r in radio[-5:]:
+            info = d_map.get(str(r['driver_number']), {"name": "Driver", "color": "#888"})
+            st.markdown(f"<div style='border-left:5px solid {info['color']}; padding-left:10: margin:10'><b>{info['name']}</b></div>", unsafe_allow_html=True)
+            st.audio(r['recording_url'])
+
+with tab4:
     weather = get_f1(f"weather?session_key={s_key}")
     if weather:
         w = weather[-1]
-        col1, col2 = st.columns(2)
-        col1.metric("Temperatura Aria", f"{w['air_temperature']}°C")
-        col2.metric("Temperatura Pista", f"{w['track_temperature']}°C")
+        st.metric("Pista", f"{w['track_temperature']}°C")
+        st.metric("Vento", f"{w['wind_speed']} m/s")
